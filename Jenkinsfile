@@ -2,64 +2,91 @@
 pipeline {
     agent any
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
     environment {
+        AWS_REGION = 'ap-southeast-2'
+        AWS_ACCOUNT_ID = '428819150292'
+        ECR_REPOSITORY = 'jenkins-ecr-demo'
         IMAGE_NAME = 'jenkins-ecr-demo'
-        CONTAINER_NAME = 'jenkins-ecr-demo-web'
     }
 
     stages {
 
         stage('Checkout') {
             steps {
-                echo 'Source code checked out from GitHub'
-                checkout scm
+                git branch: 'main',
+                    url: 'https://github.com/Leninprathappandian/jenkins-ecr-demo.git'
             }
         }
 
-        stage('Build') {
+        stage('Build Docker Image') {
             steps {
                 sh 'docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .'
             }
         }
 
-        stage('Test') {
+        stage('Tag Image') {
             steps {
                 sh '''
-                    docker rm -f jenkins-ecr-test || true
+                    docker tag ${IMAGE_NAME}:${BUILD_NUMBER} \
+                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
 
-                    docker run -d \
-                        --name jenkins-ecr-test \
-                        -p 8081:80 \
-                        ${IMAGE_NAME}:${BUILD_NUMBER}
-
-                    sleep 3
-
-                    curl --fail http://localhost:8081/
-
-                    docker rm -f jenkins-ecr-test
+                    docker tag ${IMAGE_NAME}:${BUILD_NUMBER} \
+                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
                 '''
             }
         }
 
-        stage('Deploy') {
+        stage('Authenticate with ECR') {
             steps {
-                sh '''
-                    docker rm -f ${CONTAINER_NAME} || true
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-ecr-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    sh '''
+                        set +x
+                        export AWS_DEFAULT_REGION="${AWS_REGION}"
 
-                    docker run -d \
-                        --name ${CONTAINER_NAME} \
-                        --restart unless-stopped \
-                        -p 80:80 \
-                        ${IMAGE_NAME}:${BUILD_NUMBER}
-                '''
+                        aws ecr get-login-password --region "${AWS_REGION}" |
+                        docker login --username AWS --password-stdin \
+                        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                    '''
+                }
             }
         }
 
-        stage('Verify') {
+        stage('Push Image to ECR') {
             steps {
-                sh 'curl --fail http://localhost/'
-                echo 'Website deployment successful!'
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-ecr-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    sh '''
+                        set +x
+                        docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
+
+                        docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                    '''
+                }
             }
+        }
+    }
+
+    post {
+        success {
+            echo 'Docker image successfully pushed to Amazon ECR!'
+        }
+        failure {
+            echo 'Pipeline failed. Check the console output.'
         }
     }
 }
