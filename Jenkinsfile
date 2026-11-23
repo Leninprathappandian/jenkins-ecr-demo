@@ -118,6 +118,22 @@ pipeline {
         '''
     }
 }
+        stage('Verify Deployment') {
+    steps {
+        sh '''
+            for i in 1 2 3 4 5; do
+                if curl -fsS http://localhost:8081/; then
+                    echo "Website deployment successful!"
+                    exit 0
+                fi
+                sleep 3
+            done
+
+            echo "Website deployment failed!"
+            exit 1
+        '''
+    }
+}
     }
 
     post {
