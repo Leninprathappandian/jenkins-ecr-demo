@@ -11,6 +11,7 @@ pipeline {
         AWS_ACCOUNT_ID = '428819150292'
         ECR_REPOSITORY = 'jenkins-ecr-demo'
         IMAGE_NAME = 'jenkins-ecr-demo'
+        ECR_URL = '428819150292.dkr.ecr.ap-southeast-2.amazonaws.com'
     }
 
     stages {
@@ -24,7 +25,9 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .'
+                sh '''
+                    docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
+                '''
             }
         }
 
@@ -32,10 +35,10 @@ pipeline {
             steps {
                 sh '''
                     docker tag ${IMAGE_NAME}:${BUILD_NUMBER} \
-                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
+                    ${ECR_URL}/${ECR_REPOSITORY}:${BUILD_NUMBER}
 
                     docker tag ${IMAGE_NAME}:${BUILD_NUMBER} \
-                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
+                    ${ECR_URL}/${ECR_REPOSITORY}:latest
                 '''
             }
         }
@@ -50,12 +53,22 @@ pipeline {
                     )
                 ]) {
                     sh '''
+                        #!/bin/bash
+                        set -euo pipefail
                         set +x
+
                         export AWS_DEFAULT_REGION="${AWS_REGION}"
 
-                        aws ecr get-login-password --region "${AWS_REGION}" |
-                        docker login --username AWS --password-stdin \
-                        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        echo "Checking AWS credentials..."
+                        aws sts get-caller-identity
+
+                        echo "Authenticating with Amazon ECR..."
+
+                        aws ecr get-login-password \
+                            --region "${AWS_REGION}" |
+                        docker login \
+                            --username AWS \
+                            --password-stdin "${ECR_URL}"
                     '''
                 }
             }
@@ -63,85 +76,67 @@ pipeline {
 
         stage('Push Image to ECR') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'aws-ecr-credentials',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )
-                ]) {
-                    sh '''
-                        set +x
-                        docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
+                sh '''
+                    docker push ${ECR_URL}/${ECR_REPOSITORY}:${BUILD_NUMBER}
 
-                        docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest
-                    '''
-                }
+                    docker push ${ECR_URL}/${ECR_REPOSITORY}:latest
+                '''
             }
         }
 
         stage('Pull Image from ECR') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'aws-ecr-credentials',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )
-                ]) {
-                    sh '''
-                        set +x
-                        export AWS_DEFAULT_REGION="${AWS_REGION}"
+                sh '''
+                    docker pull \
+                    ${ECR_URL}/${ECR_REPOSITORY}:${BUILD_NUMBER}
 
-                        aws ecr get-login-password --region "${AWS_REGION}" |
-                        docker login --username AWS --password-stdin \
-                        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-                        docker pull \
-                        ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
-
-                        docker images
-                    '''
-                }
+                    docker images
+                '''
             }
         }
+
         stage('Deploy Container') {
-    steps {
-        sh '''
-            docker rm -f jenkins-ecr-website || true
+            steps {
+                sh '''
+                    docker rm -f jenkins-ecr-website || true
 
-            docker run -d \
-                --name jenkins-ecr-website \
-                --restart unless-stopped \
-                -p 8081:80 \
-                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
-        '''
-    }
-}
+                    docker run -d \
+                        --name jenkins-ecr-website \
+                        --restart unless-stopped \
+                        -p 8081:80 \
+                        ${ECR_URL}/${ECR_REPOSITORY}:${BUILD_NUMBER}
+                '''
+            }
+        }
+
         stage('Verify Deployment') {
-    steps {
-        sh '''
-            for i in 1 2 3 4 5; do
-                if curl -fsS http://localhost:8081/; then
-                    echo "Website deployment successful!"
-                    exit 0
-                fi
-                sleep 3
-            done
+            steps {
+                sh '''
+                    for i in 1 2 3 4 5; do
 
-            echo "Website deployment failed!"
-            exit 1
-        '''
-    }
-}
+                        if curl -fsS http://localhost:8081/; then
+                            echo "Website deployment successful!"
+                            exit 0
+                        fi
+
+                        sleep 3
+                    done
+
+                    echo "Website deployment failed!"
+                    docker logs jenkins-ecr-website
+                    exit 1
+                '''
+            }
+        }
     }
 
     post {
         success {
-            echo 'Docker image successfully built, pushed and pulled from Amazon ECR!'
+            echo 'SUCCESS: Image built, pushed, pulled and deployed!'
         }
+
         failure {
-            echo 'Pipeline failed. Check the console output.'
+            echo 'Pipeline failed. Check the failed stage console output.'
         }
     }
 }
