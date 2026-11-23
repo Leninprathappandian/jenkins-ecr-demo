@@ -105,6 +105,19 @@ pipeline {
                 }
             }
         }
+        stage('Deploy Container') {
+    steps {
+        sh '''
+            docker rm -f jenkins-ecr-website || true
+
+            docker run -d \
+                --name jenkins-ecr-website \
+                --restart unless-stopped \
+                -p 8081:80 \
+                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
+        '''
+    }
+}
     }
 
     post {
