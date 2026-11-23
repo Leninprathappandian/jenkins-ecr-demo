@@ -79,11 +79,37 @@ pipeline {
                 }
             }
         }
+
+        stage('Pull Image from ECR') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-ecr-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    sh '''
+                        set +x
+                        export AWS_DEFAULT_REGION="${AWS_REGION}"
+
+                        aws ecr get-login-password --region "${AWS_REGION}" |
+                        docker login --username AWS --password-stdin \
+                        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+                        docker pull \
+                        ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${BUILD_NUMBER}
+
+                        docker images
+                    '''
+                }
+            }
+        }
     }
 
     post {
         success {
-            echo 'Docker image successfully pushed to Amazon ECR!'
+            echo 'Docker image successfully built, pushed and pulled from Amazon ECR!'
         }
         failure {
             echo 'Pipeline failed. Check the console output.'
